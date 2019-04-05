@@ -1,4 +1,4 @@
-function plt_wvfms(atm_wvfm,varargin)
+function [fig_wvfm] = plt_wvfms(atm_wvfm,varargin)
 %
 % SUMMARY:           PLT_WVFMS plots ATM waveform data stored in a stuctured array created by ATM_WVFM_READER
 %                   
@@ -25,14 +25,14 @@ function plt_wvfms(atm_wvfm,varargin)
 %                        t_min = 200, tmax = Inf (or left blank)
 %
 %                    The time windows for window reflections, transmit pulse and return pulsea to use for the particular data file
-%                    are campaign dependent and are listed in the HDF5 fields /waveforms/twv/ancillary_data/rx_start, 
+%                    are campaign and instrument dependent and are listed in the HDF5 fields /waveforms/twv/ancillary_data/rx_start, 
 %                    ./tx_start and ./tx_end in number of digitizer samples.
 %
 % back_ground_color: can be 'w' (white) or 'b' (black). If not set PLT_WVFMS create a figure with black background by default. 
 % 
 % ------------------------------------------------------------------------------------------------------------------------------------------------------------------
 % Author:            Michael Studinger, NASA Goddard Space Flight Center, Greenbelt MD, USA.
-% Version:           3.01 - February 14, 2018
+% Version:           3.04 - March 11, 2019
 % See also:          ATM_WVFM_READER
 % ------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -56,7 +56,7 @@ elseif ~(isfield(atm_wvfm,'laser_trigger_time_utc_seconds')) % check if atm_wvfm
 end
 
 % check if second input argument is a valid shot list
-if (nargin >= 1 && isnumeric(varargin{1}) &&  isvector(varargin{1})) % check if this is a numeric array
+if (nargin >= 2 && isnumeric(varargin{1}) &&  isvector(varargin{1})) % check if this is a numeric array
     shot_list = varargin{1};
     if (isrow(shot_list) == 1)          % determine the number of shots for a row vector
         n_shots = size(shot_list,2);
@@ -110,27 +110,40 @@ end
 %% plot 
 edge = 50; scrsz = get(0,'ScreenSize');
 
-fig1 = figure('Position',[edge edge (scrsz(3)-4*edge) (scrsz(4)-3*edge)]); 
+fig_wvfm = figure('Position',[edge edge (scrsz(3)-4*edge) (scrsz(4)-3*edge)]); 
 
 if strcmp(back_ground_color,'b') % set figure background to black 
-    colordef(fig1,'black');
+    colordef(fig_wvfm,'black');
 end
 
 for n = 1:n_shots
     shot_nr = shot_list(n);
     for i = 1:atm_wvfm.n_gates(shot_nr)
         if( atm_wvfm.shots(shot_nr).wf(i).t(1) >= t_min && atm_wvfm.shots(shot_nr).wf(i).t(1) <= t_max)
-            plot(atm_wvfm.shots(shot_nr).wf(i).t,atm_wvfm.shots(shot_nr).wf(i).w,'-','DisplayName',num2str(shot_nr)); hold on;
+            shot_id_label = sprintf('%d',atm_wvfm.shot_id(shot_nr));
+            plot(atm_wvfm.shots(shot_nr).wf(i).t,atm_wvfm.shots(shot_nr).wf(i).w,'-','DisplayName',shot_id_label); hold on;
+            clear shot_id_label;
         end
     end
 end
 
 h = legend('show','Location','northeastoutside');
-title(h,'Shot Index');
+title(h,'Unique Shot Identifier');
 
 grid on;
 xlabel('Laser Trigger Time [ns]');
 ylabel('Signal Amplitude [counts]');
+
+if atm_wvfm.info.laser_wavelength_nm == 532
+title(sprintf('%s %d nm: %d kHz, %3.1f ns, %.1f°',atm_wvfm.info.sensor,atm_wvfm.info.laser_wavelength_nm,...
+    atm_wvfm.info.laser_prf_hz/1000,atm_wvfm.info.pulse_width_fwhm_ns,atm_wvfm.info.laser_off_nadir_angle),'Color','g');
+elseif atm_wvfm.info.laser_wavelength_nm == 1064
+title(sprintf('%s %d nm: %d kHz, %3.1f ns, %.1f°',atm_wvfm.info.sensor,atm_wvfm.info.laser_wavelength_nm,...
+    atm_wvfm.info.laser_prf_hz/1000,atm_wvfm.info.pulse_width_fwhm_ns,atm_wvfm.info.laser_off_nadir_angle),'Color','r');    
+else
+title(sprintf('%s %d nm: %d kHz, %3.1f ns, %.1f°',atm_wvfm.info.sensor,atm_wvfm.info.laser_wavelength_nm,...
+    atm_wvfm.info.laser_prf_hz/1000,atm_wvfm.info.pulse_width_fwhm_ns,atm_wvfm.info.laser_off_nadir_angle),'Color','w');
+end
 set(gca,'FontSize',16);
 
 

@@ -45,7 +45,7 @@ function [atm_wvfm] = atm_wvfm_reader(f_name_inp,varargin)
 %                   atm_wvfm must be a valid MATLAB variable name.  
 % ------------------------------------------------------------------------------------------------------------------------------------------------------------------
 % Author:           Michael Studinger, NASA Goddard Space Flight Center, Greenbelt MD, USA.
-% Version:          3.01 - February 14, 2018
+% Version:          3.08 - April 5, 2019
 % See also:         atm_wvfm_info.m
 % ------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -221,6 +221,12 @@ if (size(info.Groups,1) == 7)
     else
         error('atm_wvfm_reader:wvfm_fmt_vers', '\n\tERROR: Cannot determine ATM waveform format version from HDF5 file.')
     end
+    
+elseif (size(info.Groups,1) == 6) % IR file withouth /footprint directory
+    if (isfield(info,'Groups') && strcmp(info.Groups(6).Groups(1).Name,'/waveforms/twv'))
+        data_fmt = 0; % current ATM waveform format stored in subgroup /waveforms/twv
+        data_fmt_str = 'ATM Waveform Format Vers. 2.0 (IR)';
+    end
 else
     error('atm_wvfm_info:input_struct','\n\tERROR: ATM waveform struct must have 7 groups.\n')
 end
@@ -229,10 +235,13 @@ clear info;
 
 %% read data and set up MATLAB serial time tags for individual laser shots
 
-% read qfit contents 
-lon = h5read(f_name_inp,'/footprint/longitude'); % ATM longitudes are between 0° and 360°
-lat = h5read(f_name_inp,'/footprint/latitude');
-ele = h5read(f_name_inp,'/footprint/elevation');
+% read qfit contents for green files only
+
+if (data_fmt ~= 0)
+    lon = h5read(f_name_inp,'/footprint/longitude'); % ATM longitudes are between 0° and 360°
+    lat = h5read(f_name_inp,'/footprint/latitude');
+    ele = h5read(f_name_inp,'/footprint/elevation');
+end
 
 % read gps antenna locations
 
@@ -254,9 +263,11 @@ shots_utc_num_date = day_first_shot_num + shots_seconds_of_day/86400; % time tag
 %% identify laser shots that fit spatial and temporal search criteria
 
 t1 = tic;
-if (poly_search == 1)
+if (poly_search == 1 & data_fmt ~= 0) % IR files don't have locations
     indx_polygon = inpolygon(lon,lat,poly_lon,poly_lat); % returns array with ones for shots inside the polyon or on the edge and zero outside
     shot_list_poly = find(indx_polygon == 1);
+elseif (poly_search == 1 & data_fmt == 0) % IR files don't have locations
+     error('atm_wvfm_reader:search', '\n\tERROR: The infrared HDF5 file contains no geolocations. Spatial searching is not possible.')
 end
 t_search_poly = toc(t1);
 
@@ -270,7 +281,7 @@ t_search_time = toc(t2);
 if (poly_search == 1 && time_search == 0) % spatial search only
     shot_list_search = shot_list_poly;
     if (size(shot_list_poly,1) < 1)
-        error('atm_wvfm_reader:search1', '\n\tERROR: The HDF5 file contains no laser shots within the spatial search parameters.')
+        error('atm_wvfm_reader:search', '\n\tERROR: The HDF5 file contains no laser shots within the spatial search parameters.')
     end
 elseif (poly_search == 0 && time_search == 1) % temporal search only
     shot_list_search = shot_list_time;
@@ -283,7 +294,7 @@ elseif (poly_search == 1 && time_search == 1) % combined spatial and temporal se
         error('atm_wvfm_reader:search3', '\n\tERROR: The HDF5 file contains no laser shots that fit both, the spatial and temporal search parameters.')
     end
 elseif (poly_search == 0 && time_search == 0) % no search. import entire HDF5 file
-    shot_list_search = (1:1:size(lon,1))';
+    shot_list_search = (1:1:length(shots_utc_num_date))';  % need to handle IR files with no locations
 else
         error('atm_wvfm_reader:search4', '\n\tERROR: The HDF5 cannot be imported.')
 end
@@ -292,7 +303,13 @@ end
 %% determine the record/shot and range gate information necessary to reassemble the waveforms
 % information is stored in different subgroups depending on data format type: 1 (ATM legacy) or 2 (current waveform)
 
-if (data_fmt == 2)
+if (data_fmt == 2 || data_fmt == 0)
+    
+    tailnumber = char(h5read(f_name_inp,'/ancillary_data/aircraft/tailnumber'));
+    platform = char(h5read(f_name_inp,'/ancillary_data/aircraft/name'));
+    campaign = char(h5read(f_name_inp,'/ancillary_data/aircraft/campaign'));
+    aircraft_AGL = h5read(f_name_inp,'/aircraft/AGL');
+
     
     % sampling interval
     sample_int_ns = h5read(f_name_inp,'/waveforms/twv/ancillary_data/sample_interval'); % sampling interval in nano seconds
@@ -300,10 +317,10 @@ if (data_fmt == 2)
     
     % laser shots
     shot_gate_count = h5read(f_name_inp,'/waveforms/twv/shot/gate_count');   % number of gates in shot
-    shot_gate_start = h5read(f_name_inp,'/waveforms/twv/shot/gate_start');   % record number of waveform's first gate in shot (0, 3, 6,...)
+    shot_gate_start = h5read(f_name_inp,'/waveforms/twv/shot/gate_start');   % 1-based record number of waveform's first gate in shot (1, 4, 7,...)
     shot_identifier = h5read(f_name_inp,'/waveforms/twv/shot/number');       % unique shot identifier
-    shot_gate_xmt   = h5read(f_name_inp,'/laser/gate_xmt');                  % number of range gate in shot/record with transmit waveform (typically 1 or 2)
-    shot_gate_rcv   = h5read(f_name_inp,'/laser/gate_rcv');                  % number of range gate in shot/record with return waveform (typically 2, 3 or higher)
+    shot_gate_xmt   = h5read(f_name_inp,'/laser/gate_xmt');                  % number of 1-based range gate in shot/record with transmit waveform (typically 1 or 2)
+    shot_gate_rcv   = h5read(f_name_inp,'/laser/gate_rcv');                  % number of 1-based range gate in shot/record with return waveform (typically 2, 3 or higher)
     cal_range       = h5read(f_name_inp,'/laser/calrng');                    % calibrated slant range from ATM origin to surface
     
     rx_width = h5read(f_name_inp,'/laser/pulse_width');     
@@ -313,12 +330,28 @@ if (data_fmt == 2)
     point_offnadir = h5read(f_name_inp,'/laser/point_offnadir'); 
 
     
-    % gate information
-    gate_wvfm_start  = h5read(f_name_inp,'/waveforms/twv/gate/wvfm_start');  % int32 pointer to first sample in waveform gate (0, 96, 192, ...)
+    % gate information ~ satu count not yet used. 
+    gate_wvfm_start  = h5read(f_name_inp,'/waveforms/twv/gate/wvfm_start');  % int32 pointer to 1-based first sample in waveform gate (1, 97, 193, ...)
     gate_wvfm_length = h5read(f_name_inp,'/waveforms/twv/gate/wvfm_length'); % int32
     gate_position    = h5read(f_name_inp,'/waveforms/twv/gate/position');    % int32 number of samples after laser trigger (n = 0 marks trigger)
-    % gate_satu_cnt    = h5read(f_name_inp,'/waveforms/twv/gate/satu_cnt');    % int32 number of samples in gate that are saturated (255 counts for 8 bit digitizer)
-
+    gate_satu_cnt    = h5read(f_name_inp,'/waveforms/twv/gate/pulse/sat_count');  % int32 number of samples in gate that are saturated (255 counts for 8 bit digitizer)
+    
+    % added June 27, 2018 & Dec 18, 2018
+    gate_pulse_width = h5read(f_name_inp,'/waveforms/twv/gate/pulse/width');    % width of pulse (number of samples) based on a threshold of 35% of peak
+    gate_n_pulses    = h5read(f_name_inp,'/waveforms/twv/gate/pulse/count');    % number of pulses in gate (= number of threshold crossings divided by two)
+    gate_area        = h5read(f_name_inp,'/waveforms/twv/gate/pulse/area');    % area of waveform pulse above noise floor (in counts * nanoseconds)
+    
+    % some useful parameters, added July 2, 2018
+    gate_xmt         = h5read(f_name_inp,'/laser/gate_xmt');                    % gate number of transmit pulse
+    gate_rcv         = h5read(f_name_inp,'/laser/gate_rcv');                    % gate number of primary receive pulse
+    scan_azimuth     = h5read(f_name_inp,'/laser/scan_azimuth');                % rotating ATM scanner mirror position
+    
+    % parameters that help users identify/search for tx and rx waveforms and skip the windwo reflection. Added 12/06/2018. don't need it here.
+    % see code in atm_wfm_info struct below
+    % tx_start         = h5read(f_name_inp,'/waveforms/twv/ancillary_data/tx_start'); % 1-based starting bound for transmit waveform search in digitizer samples
+    % tx_end           = h5read(f_name_inp,'/waveforms/twv/ancillary_data/tx_end'); % 1-based endpoint for transmit waveform search in digitizer samples
+    % rx_start         = h5read(f_name_inp,'/waveforms/twv/ancillary_data/rx_start'); % 1-based starting bound for receive waveform in digitizer samples
+    
     % range bins for faster import
     wvfm_amplitude = h5read(f_name_inp,'/waveforms/twv/wvfm/amplitude');     % uint8
 
@@ -333,9 +366,7 @@ end
 % populate the waveform struct - this is for some reason not much faster than doing it inside the loop
 
 atm_wvfm = struct('shot_id',shot_identifier(shot_list_search),...
-    'lon',lon(shot_list_search),...
-    'lat',lat(shot_list_search),...
-    'ele',ele(shot_list_search),...
+    'aircraft_AGL',aircraft_AGL(shot_list_search),...
     'n_gates',shot_gate_count(shot_list_search),...
     'shot_gate_start', shot_gate_start(shot_list_search),...
     'shot_gate_xmt',shot_gate_xmt(shot_list_search),...
@@ -343,14 +374,23 @@ atm_wvfm = struct('shot_id',shot_identifier(shot_list_search),...
     'cal_range',cal_range(shot_list_search),...
     'rx_width',rx_width(shot_list_search),...
     'rx_sigstr',rx_sigstr(shot_list_search),...
+    'gate_xmt',gate_xmt(shot_list_search),...
+    'scan_azimuth',scan_azimuth(shot_list_search),...
+    'gate_rcv',gate_rcv(shot_list_search),...
     'gps_lat',gps_lat(shot_list_search),...
     'gps_lon',gps_lon(shot_list_search),...
     'gps_ele',gps_ele(shot_list_search),...
     'point_azimuth',point_azimuth(shot_list_search),...
     'point_offnadir',point_offnadir(shot_list_search),...
     'laser_trigger_time_utc_serial',shots_utc_num_date(shot_list_search),...
-    'laser_trigger_time_utc_seconds',shots_seconds_of_day(shot_list_search));    
+    'laser_trigger_time_utc_seconds',shots_seconds_of_day(shot_list_search));   
 
+if (data_fmt == 2) % green files only
+    atm_wvfm.lon = lon(shot_list_search);
+    atm_wvfm.lat = lat(shot_list_search);
+    atm_wvfm.ele = ele(shot_list_search);
+end
+    
 tStart = tic;
 
 for i = 1:size(shot_list_search,1)
@@ -372,6 +412,12 @@ for i = 1:size(shot_list_search,1)
         tw_tmp = 0:sample_int_ns:double(gate_wvfm_length(indx))-1;
         tw_tmp1 = tw_tmp(1:gate_wvfm_length(indx));
         atm_wvfm.shots(i).wf(k).t = double(gate_position(indx))*sample_int_ns + tw_tmp1;
+        
+        % add number of saturated samples and pulse width
+        atm_wvfm.shots(i).wf(k).n_sat = gate_satu_cnt(indx);
+        atm_wvfm.shots(i).wf(k).pulse_width = gate_pulse_width(indx);
+        atm_wvfm.shots(i).wf(k).gate_n_pulses = gate_n_pulses(indx); 
+        atm_wvfm.shots(i).wf(k).area = gate_area(indx); 
         
         % only export number of digitizer samples following laser trigger to save space
         % atm_wvfm.shots(i).wf(k).gate_position = gates_position(indx);
@@ -405,7 +451,20 @@ else
 end
 atm_wvfm.info.data_fmt_str           = data_fmt_str;
 atm_wvfm.info.sensor                 = upper(char(h5read(f_name_inp,'/ancillary_data/instrument/sensor')));
-atm_wvfm.info.sampling_int_ns        = sample_int_ns; 
+atm_wvfm.info.sampling_int_ns        = sample_int_ns;
+atm_wvfm.info.platform               = platform;
+atm_wvfm.info.campaign               = campaign;
+atm_wvfm.info.tailnumber             = tailnumber;
+atm_wvfm.info.laser_prf_hz           = h5read(f_name_inp,'/ancillary_data/instrument/laser_prf');
+atm_wvfm.info.laser_off_nadir_angle  = h5read(f_name_inp,'/ancillary_data/instrument/off_nadir_angle');
+atm_wvfm.info.pulse_width_fwhm_ns    = h5read(f_name_inp,'/ancillary_data/instrument/laser_pulse_width');
+atm_wvfm.info.laser_wavelength_nm    = h5read(f_name_inp,'/ancillary_data/instrument/laser_wavelength');
+atm_wvfm.info.rx_start_ns            = h5read(f_name_inp,'/waveforms/twv/ancillary_data/rx_start')*sample_int_ns;
+atm_wvfm.info.tx_start_ns            = h5read(f_name_inp,'/waveforms/twv/ancillary_data/tx_start')*sample_int_ns;
+atm_wvfm.info.tx_end_ns              = h5read(f_name_inp,'/waveforms/twv/ancillary_data/tx_end')*sample_int_ns;
+atm_wvfm.info.rx_start_samples       = h5read(f_name_inp,'/waveforms/twv/ancillary_data/rx_start'); % 1-based starting bound for transmit waveform search in digitizer samples
+atm_wvfm.info.tx_start_samples       = h5read(f_name_inp,'/waveforms/twv/ancillary_data/tx_start'); % 1-based starting bound for receive waveform search in digitizer samples
+atm_wvfm.info.tx_end_samples         = h5read(f_name_inp,'/waveforms/twv/ancillary_data/tx_end');   % 1-based endpoint for transmit waveform search in digitizer samples
 atm_wvfm.info.reference_frame        = upper(char(h5read(f_name_inp,'/ancillary_data/reference_frame')));
 atm_wvfm.info.date_processed         = datestr(now);
 atm_wvfm.info.m_file_used            = mfilename('fullpath');
@@ -421,16 +480,18 @@ atm_wvfm.info.shot_times.utc_time_first_shot_search = datestr(shots_utc_num_date
 atm_wvfm.info.shot_times.utc_time_last_shot_search  = datestr(shots_utc_num_date(shot_list_search(end)),'yyyy-mm-dd HH:MM:SS.FFF');
 
 % add closed polyong (clockwise order) of bounding box coordinates of both, the entire HDF5 file and the search results
-atm_wvfm.info.bbox.lon_HDF5          = [min(lon) max(lon) max(lon) min(lon) min(lon)];
-atm_wvfm.info.bbox.lat_HDF5          = [max(lat) max(lat) min(lat) min(lat) max(lat)];
-atm_wvfm.info.bbox.lon_search        = ...
-    [min(lon(shot_list_search)) max(lon(shot_list_search)) max(lon(shot_list_search)) min(lon(shot_list_search)) min(lon(shot_list_search))];
-atm_wvfm.info.bbox.lat_search        = ...
-    [max(lat(shot_list_search)) max(lat(shot_list_search)) min(lat(shot_list_search)) min(lat(shot_list_search)) max(lat(shot_list_search))];
+if (data_fmt == 2) % green files only
+    atm_wvfm.info.bbox.lon_HDF5          = [min(lon) max(lon) max(lon) min(lon) min(lon)];
+    atm_wvfm.info.bbox.lat_HDF5          = [max(lat) max(lat) min(lat) min(lat) max(lat)];
+    atm_wvfm.info.bbox.lon_search        = ...
+        [min(lon(shot_list_search)) max(lon(shot_list_search)) max(lon(shot_list_search)) min(lon(shot_list_search)) min(lon(shot_list_search))];
+    atm_wvfm.info.bbox.lat_search        = ...
+        [max(lat(shot_list_search)) max(lat(shot_list_search)) min(lat(shot_list_search)) min(lat(shot_list_search)) max(lat(shot_list_search))];
+end
 
 % add number of shots/records and also indices of the shots that match the temporal and spatial search criteria
-atm_wvfm.info.shots.n_shots_HDF5     = uint64(size(lon,1));
-atm_wvfm.info.shots.n_shots_search   = uint64(size(shot_list_search,1));
+atm_wvfm.info.shots.n_shots_HDF5     = uint64(length(shots_utc_num_date));
+atm_wvfm.info.shots.n_shots_search   = uint64(length(shot_list_search));
 atm_wvfm.info.shots.shot_indx_search = uint64(shot_list_search);
 
 %% display processing information in MATLAB Command Window or Console if desired
@@ -441,11 +502,11 @@ if (verbose == 1)
     fprintf('\n-----------------------------------------------------------------------\n');
     fprintf('Imported file %s\n',[name ext]);
     fprintf('-----------------------------------------------------------------------\n');
-    fprintf('Processing time (sec):                      %.2f\n',t_elapsed);
+    fprintf('Processing time (sec):                    %6.2f\n',t_elapsed);
     fprintf('Time for spatial search (sec):              %.2f\n',t_search_poly);
     fprintf('Time for temporal search (sec):             %.2f\n',t_search_time);
-    fprintf('Number of laser shots in ATM HDF5 file: %8d\n',size(lon,1));
-    fprintf('Number of shots matching search params: %8d (%.1f%%)\n',size(shot_list_search,1),(size(shot_list_search,1)/size(lon,1))*100);
+    fprintf('Number of laser shots in ATM HDF5 file: %8d\n',length(shots_utc_num_date));
+    fprintf('Number of shots matching search params: %8d (%.1f%%)\n',size(shot_list_search,1),(size(shot_list_search,1)/length(shots_utc_num_date))*100);
     fprintf('-----------------------------------------------------------------------\n');
     
 end
