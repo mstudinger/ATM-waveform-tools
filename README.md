@@ -8,5 +8,5 @@ The ILATMW1B waveform data is available at NSIDC:
 https://nsidc.org/data/ILNSAW1B/versions/1 (narrow swath)
 https://nsidc.org/data/ILATMW1B/versions/1 (wide swath)
 
-A user guide for the ILATMW1B waveform data can be downloaded here:
+A user guide for the ILATMW1B waveform data is included and can also be downloaded here:
 https://atm.wff.nasa.gov/files/browser/ATM_waveform_product_user_manual.pdf
